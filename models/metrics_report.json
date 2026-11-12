@@ -1,0 +1,28 @@
+{
+  "model_version": "1.0.0",
+  "trained_at": "2026-11-10T15:31:14.232400+00:00",
+  "decision_threshold": 0.50188809633255,
+  "holdout_metrics": {
+    "threshold": 0.5019,
+    "sensitivity_recall": 0.6743,
+    "specificity": 0.7836,
+    "ppv_precision": 0.3584,
+    "npv": 0.9307,
+    "f1_score": 0.468,
+    "auc_roc": 0.79,
+    "auc_pr": 0.4494,
+    "brier_score": 0.1638,
+    "prevalence": 0.152,
+    "true_positives": 205,
+    "false_positives": 367,
+    "true_negatives": 1329,
+    "false_negatives": 99
+  },
+  "library_versions": {
+    "scikit-learn": "1.9.1",
+    "xgboost": "3.4.1",
+    "shap": "0.54.1",
+    "numpy": "2.5.4",
+    "pandas": "3.1.1"
+  }
+}

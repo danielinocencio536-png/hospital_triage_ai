@@ -1,0 +1,38 @@
+{
+  "transformed": {
+    "age": 0.575198,
+    "length_of_stay": 0.277778,
+    "num_medications": 0.236897,
+    "comorbidity_heart_failure": 0.222841,
+    "admission_type_ELECTIVE": 0.20477,
+    "comorbidity_chronic_kidney_disease": 0.184969,
+    "comorbidity_diabetes": 0.153303,
+    "num_lab_procedures": 0.147207,
+    "comorbidity_coronary_artery_disease": 0.1397,
+    "comorbidity_copd": 0.126835,
+    "comorbidity_cancer": 0.093186,
+    "comorbidity_hypertension": 0.088943,
+    "gender_F": 0.043256,
+    "admission_type_OBSERVATION": 0.035808,
+    "comorbidity_liver_disease": 0.035407,
+    "admission_type_URGENT": 0.035342,
+    "admission_type_EMERGENCY": 0.024566,
+    "gender_M": 0.011887
+  },
+  "original": {
+    "age": 0.575198,
+    "admission_type": 0.300485,
+    "length_of_stay": 0.277778,
+    "num_medications": 0.236897,
+    "comorbidity_heart_failure": 0.222841,
+    "comorbidity_chronic_kidney_disease": 0.184969,
+    "comorbidity_diabetes": 0.153303,
+    "num_lab_procedures": 0.147207,
+    "comorbidity_coronary_artery_disease": 0.1397,
+    "comorbidity_copd": 0.126835,
+    "comorbidity_cancer": 0.093186,
+    "comorbidity_hypertension": 0.088943,
+    "gender": 0.055143,
+    "comorbidity_liver_disease": 0.035407
+  }
+}
