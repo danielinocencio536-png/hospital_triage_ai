@@ -1,16 +1,27 @@
-# Runtime
-fastapi>=0.115
-uvicorn[standard]>=0.30
-pydantic>=2.7
-pydantic-settings>=2.3
-sqlalchemy[asyncio]>=2.0
-asyncpg>=0.29          # PostgreSQL
-aiosqlite>=0.20        # SQLite (desenvolvimento)
+# Versões testadas juntas com Python 3.13 (precisa de >= 3.12: numpy 2.5 e scipy 1.18 não têm wheel para 3.11).
+# As de ML são as mesmas do treino, ver models/metrics_report.json.
 
-# Modelo (versões usadas no treino — ver models/metrics_report.json)
+# API
+fastapi==0.163.0
+starlette==1.10.0
+uvicorn==0.54.0
+
+# Configuração e schemas
+pydantic==2.14.3
+pydantic-settings==2.16.2
+python-dotenv==1.2.4
+
+# Banco
+SQLAlchemy==2.1.8
+greenlet==3.5.6
+asyncpg==0.32.0
+aiosqlite==0.22.1
+
+# Modelo
+numpy==2.5.4
+pandas==3.1.1
+scipy==1.18.1
 scikit-learn==1.9.1
 xgboost==3.4.1
 shap==0.54.1
-numpy==2.5.4
-pandas==3.1.1
-joblib>=1.4
+joblib==1.6.0

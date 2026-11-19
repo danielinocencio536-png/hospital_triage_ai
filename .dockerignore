@@ -1,0 +1,19 @@
+# Somente src/ e requirements.txt entram no contexto útil do build.
+.git
+.gitignore
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.env
+*.db
+
+# O modelo é treinado dentro do build (stage "trainer").
+data
+models
+
+tests
+docker-compose.yml
+.vscode
+.idea

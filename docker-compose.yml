@@ -1,0 +1,51 @@
+# Precisa de um .env na raiz com pelo menos POSTGRES_PASSWORD (ver .env.example).
+#
+#   docker compose up --build -d
+#   docker compose down       # mantém os dados
+#   docker compose down -v    # apaga o volume do banco junto
+name: hospital-triage-ai
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo .env}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # banco só na rede interna; para acessar da máquina, descomente:
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: hospital-triage-ai:1.0.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # em production o /docs fica desligado
+      TRIAGE_ENVIRONMENT: ${TRIAGE_ENVIRONMENT:-production}
+      TRIAGE_LOG_LEVEL: ${TRIAGE_LOG_LEVEL:-INFO}
+      TRIAGE_CORS_ORIGINS: ${TRIAGE_CORS_ORIGINS:-http://localhost:3000}
+      TRIAGE_DATABASE__HOST: postgres
+      TRIAGE_DATABASE__PORT: "5432"
+      TRIAGE_DATABASE__USER: ${POSTGRES_USER:-triage}
+      TRIAGE_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo .env}
+      TRIAGE_DATABASE__NAME: ${POSTGRES_DB:-triage_db}
+
+volumes:
+  postgres_data:
