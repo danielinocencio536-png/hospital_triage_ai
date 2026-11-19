@@ -1,18 +1,7 @@
-"""Modelos ORM (SQLAlchemy 2.0, estilo tipado ``Mapped[...]``).
+"""Tabela de auditoria: uma linha por predição feita pela API.
 
-Arquitetura BCE — camada Entity de persistência.
-
-``triage_audit_logs`` registra cada predição para rastreabilidade clínica e
-regulatória (quem/quando/qual modelo/qual resultado), permitindo:
-    * auditoria de decisões assistidas por IA;
-    * monitoramento de drift (distribuição de entradas e de probabilidades);
-    * reavaliação futura do modelo contra o desfecho real.
-
-Privacidade (LGPD): só armazena ``patient_id`` pseudonimizado e as features
-clínicas já anonimizadas do request — nenhum dado identificável direto.
-
-Os tipos são portáveis: ``JSONB`` no PostgreSQL e ``JSON`` em outros bancos
-(SQLite nos testes); ``Uuid`` vira ``UUID`` nativo no PostgreSQL.
+Só guarda o patient_id pseudonimizado e as features do request (LGPD).
+Usa JSONB no Postgres e JSON no SQLite.
 """
 
 from __future__ import annotations
@@ -36,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-#: Convenção de nomes de constraints — mantém migrações (Alembic) determinísticas.
+# nomes fixos de constraints, para as migrações do Alembic não mudarem à toa
 NAMING_CONVENTION: dict[str, str] = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -49,24 +38,18 @@ PortableJSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Base(DeclarativeBase):
-    """Base declarativa compartilhada por todos os modelos ORM."""
-
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 class TriageAuditLog(Base):
-    """Uma linha por predição realizada pela API de triagem."""
-
     __tablename__ = "triage_audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     request_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, nullable=False)
     patient_id: Mapped[str | None] = mapped_column(String(64), index=True)
 
-    # --- Entrada -------------------------------------------------------------
     input_features: Mapped[dict[str, Any]] = mapped_column(PortableJSON, nullable=False)
 
-    # --- Saída do modelo -----------------------------------------------------
     risk_probability: Mapped[float] = mapped_column(Float, nullable=False)
     risk_category: Mapped[str] = mapped_column(String(16), nullable=False)
     readmission_predicted: Mapped[bool] = mapped_column(Boolean, nullable=False)
@@ -75,7 +58,6 @@ class TriageAuditLog(Base):
         PortableJSON, nullable=False, default=list
     )
 
-    # --- Metadados operacionais ---------------------------------------------
     model_version: Mapped[str] = mapped_column(String(32), nullable=False)
     inference_latency_ms: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(
@@ -92,7 +74,7 @@ class TriageAuditLog(Base):
         CheckConstraint(
             "decision_threshold >= 0 AND decision_threshold <= 1", name="decision_threshold_range"
         ),
-        # Consultas típicas: "pacientes High nas últimas 24h", séries temporais de drift.
+        # ex.: "pacientes High nas últimas 24h"
         Index("ix_triage_audit_logs_category_created", "risk_category", "created_at"),
         Index("ix_triage_audit_logs_created_at", "created_at"),
     )

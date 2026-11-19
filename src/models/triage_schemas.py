@@ -1,15 +1,4 @@
-"""Contratos de entrada/saída da API de triagem (Pydantic v2).
-
-Arquitetura BCE — camada Entity: estes modelos definem *o que* trafega pela
-fronteira HTTP e são a ponte tipada entre o JSON do cliente e o ``DataFrame``
-esperado pelo ``ModelBundle`` treinado no DIA 1.
-
-Os nomes, domínios e faixas de valores espelham exatamente o gerador sintético
-(``src/pipelines/generate_mimic_data.py``) e o ``FeatureSchema`` do treino:
-    categóricas : gender, admission_type
-    numéricas   : age, length_of_stay, num_lab_procedures, num_medications
-    binárias    : comorbidity_<nome> (8 flags)
-"""
+"""Schemas de entrada e saída da API. Os campos seguem as colunas do dataset sintético."""
 
 from __future__ import annotations
 
@@ -22,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.pipelines.generate_mimic_data import COMORBIDITY_PREFIX
 
-#: Identificador pseudonimizado — nunca nome, CPF ou prontuário em claro (LGPD).
+# só ID pseudonimizado: sem espaço nem pontuação, então nome ou CPF formatado não passa
 PseudonymizedId = Annotated[
     str,
     Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$"),
@@ -50,19 +39,12 @@ _EXAMPLE_REQUEST: Final[dict[str, Any]] = {
 }
 
 
-# =============================================================================
-# ENUMS DE DOMÍNIO
-# =============================================================================
 class Gender(StrEnum):
-    """Sexo biológico registrado (padrão MIMIC-IV)."""
-
     MALE = "M"
     FEMALE = "F"
 
 
 class AdmissionType(StrEnum):
-    """Tipo de admissão (padrão MIMIC-IV simplificado)."""
-
     EMERGENCY = "EMERGENCY"
     URGENT = "URGENT"
     ELECTIVE = "ELECTIVE"
@@ -70,8 +52,6 @@ class AdmissionType(StrEnum):
 
 
 class RiskCategory(StrEnum):
-    """Estratificação clínica do risco de readmissão em 30 dias."""
-
     LOW = "Low"
     MODERATE = "Moderate"
     HIGH = "High"
@@ -80,7 +60,6 @@ class RiskCategory(StrEnum):
     def from_probability(
         cls, probability: float, moderate_threshold: float, high_threshold: float
     ) -> RiskCategory:
-        """Converte a probabilidade em categoria usando as faixas configuradas."""
         if not 0.0 <= probability <= 1.0:
             raise ValueError(f"Probabilidade fora de [0, 1]: {probability}")
         if probability >= high_threshold:
@@ -91,24 +70,16 @@ class RiskCategory(StrEnum):
 
 
 class FactorDirection(StrEnum):
-    """Sentido do efeito de um fator sobre o risco previsto."""
-
     INCREASES_RISK = "increases_risk"
     DECREASES_RISK = "decreases_risk"
 
 
-# =============================================================================
-# REQUEST
-# =============================================================================
 class _StrictModel(BaseModel):
-    """Base: rejeita campos desconhecidos (evita typos silenciosos do cliente)."""
-
+    # campo desconhecido (ou com typo) vira 422 em vez de ser ignorado
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
 class Comorbidities(_StrictModel):
-    """Painel de comorbidades crônicas (ausência = ``False``)."""
-
     hypertension: bool = False
     diabetes: bool = False
     heart_failure: bool = False
@@ -120,11 +91,10 @@ class Comorbidities(_StrictModel):
 
     @property
     def count(self) -> int:
-        """Número total de comorbidades presentes."""
         return sum(self.model_dump().values())
 
     def to_feature_flags(self) -> dict[str, int]:
-        """``{"comorbidity_diabetes": 1, ...}`` — formato das colunas de treino."""
+        """{"comorbidity_diabetes": 1, ...}, igual às colunas do treino."""
         return {f"{COMORBIDITY_PREFIX}{name}": int(flag) for name, flag in self.model_dump().items()}
 
 
@@ -147,11 +117,7 @@ class PatientTriageRequest(_StrictModel):
     comorbidities: Comorbidities = Field(default_factory=Comorbidities)
 
     def to_model_features(self) -> dict[str, Any]:
-        """Achata o request no dicionário de features esperado pelo pipeline.
-
-        As chaves batem 1:1 com ``FeatureSchema.all_features`` do DIA 1; a
-        ordenação final das colunas é responsabilidade do serviço de inferência.
-        """
+        """Mesmas chaves de FeatureSchema.all_features (quem ordena é o serviço)."""
         return {
             "gender": self.gender.value,
             "admission_type": self.admission_type.value,
@@ -163,12 +129,7 @@ class PatientTriageRequest(_StrictModel):
         }
 
 
-# =============================================================================
-# RESPONSE
-# =============================================================================
 class RiskFactor(BaseModel):
-    """Contribuição individual (SHAP local) de uma feature clínica."""
-
     model_config = ConfigDict(frozen=True)
 
     feature: str = Field(description="Nome da feature clínica original (one-hot agregado).")
@@ -185,8 +146,6 @@ class RiskFactor(BaseModel):
 
 
 class TriagePredictionResponse(BaseModel):
-    """Resultado da triagem de risco de readmissão em 30 dias."""
-
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [

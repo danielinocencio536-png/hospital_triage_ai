@@ -1,18 +1,4 @@
-"""Endpoints HTTP da triagem de readmissão.
-
-Arquitetura BCE — camada Boundary: valida a entrada (Pydantic), delega ao
-``TriageInferenceService`` (Control) e grava a auditoria via
-``AuditLogRepository``. Nenhuma regra de negócio vive aqui.
-
-Rotas:
-    POST /api/v1/triage/predict  -> risco de readmissão + top fatores SHAP
-    GET  /health                 -> estado do modelo e do banco (sem prefixo,
-                                    para probes de Docker/Kubernetes)
-
-Dependências são resolvidas a partir de ``app.state`` (preenchido no lifespan
-de ``src/main.py``) e podem ser substituídas nos testes com
-``app.dependency_overrides``.
-"""
+"""Rotas: POST /api/v1/triage/predict e GET /health (sem prefixo, para os probes)."""
 
 from __future__ import annotations
 
@@ -34,13 +20,10 @@ from src.services.inference_service import (
 
 logger = logging.getLogger(__name__)
 
-#: Header que informa ao cliente se a predição foi registrada na auditoria.
+# diz ao cliente se a predição entrou na auditoria
 AUDIT_HEADER = "X-Audit-Logged"
 
 
-# =============================================================================
-# DEPENDÊNCIAS
-# =============================================================================
 def get_inference_service(request: Request) -> TriageInferenceService:
     service: TriageInferenceService | None = getattr(request.app.state, "inference_service", None)
     if service is None:
@@ -65,9 +48,6 @@ DatabaseDep = Annotated[DatabaseManager | None, Depends(get_database)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-# =============================================================================
-# TRIAGEM
-# =============================================================================
 triage_router = APIRouter(prefix="/triage", tags=["Triagem"])
 
 
@@ -88,12 +68,9 @@ async def predict_readmission_risk(
     service: InferenceServiceDep,
     audit: AuditRepositoryDep,
 ) -> TriagePredictionResponse:
-    """Calcula probabilidade, categoria (Low/Moderate/High) e os fatores que mais
-    pesaram na predição deste paciente.
+    """Retorna a probabilidade, a categoria (Low/Moderate/High) e os fatores que mais pesaram.
 
-    A auditoria é *fail-open*: se o banco estiver fora, a predição ainda é
-    devolvida (o atendimento não para), mas o header ``X-Audit-Logged: false``
-    sinaliza a falha e o erro é registrado no log da aplicação.
+    Se a gravação da auditoria falhar, a predição volta mesmo assim, com X-Audit-Logged: false.
     """
     try:
         result = await run_in_threadpool(service.predict, payload)
@@ -107,7 +84,7 @@ async def predict_readmission_risk(
         try:
             await audit.save(result)
             audited = True
-        except Exception:  # noqa: BLE001 — auditoria não pode derrubar a predição
+        except Exception:  # noqa: BLE001
             logger.exception(
                 "Falha ao gravar auditoria do request_id=%s", result.response.request_id
             )
@@ -124,9 +101,6 @@ async def predict_readmission_risk(
     return result.response
 
 
-# =============================================================================
-# HEALTH-CHECK
-# =============================================================================
 class ComponentStatus(BaseModel):
     model_loaded: bool
     model_version: str | None = None
@@ -153,8 +127,7 @@ health_router = APIRouter(tags=["Saúde"])
 async def health(
     request: Request, response: Response, settings: SettingsDep, database: DatabaseDep
 ) -> HealthResponse:
-    """``ok`` = modelo e banco ok · ``degraded`` = predições funcionam, mas sem
-    auditoria · ``unavailable`` (HTTP 503) = sem modelo, a API não serve."""
+    """ok, degraded (sem banco, logo sem auditoria) ou unavailable (503, sem modelo)."""
     service: TriageInferenceService | None = getattr(request.app.state, "inference_service", None)
 
     if database is None:

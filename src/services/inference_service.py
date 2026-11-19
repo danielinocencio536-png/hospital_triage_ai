@@ -1,22 +1,11 @@
-"""Serviço de inferência do risco de readmissão em 30 dias.
+"""Inferência: probabilidade, categoria de risco e fatores SHAP de um paciente.
 
-Arquitetura BCE:
-    * Entity   -> ``InferenceResult``: predição + latência (resultado do caso de uso).
-    * Control  -> ``TriageInferenceService``: transforma o request em features,
-      calcula a probabilidade, estratifica o risco e explica a predição com
-      SHAP local agregado por feature clínica original.
-    * Boundary -> ``ModelLoader`` (lê o ``ModelBundle`` do disco) e
-      ``AuditLogRepository`` (grava ``triage_audit_logs``).
+O TreeExplainer é criado uma vez só, porque montar um por request deixaria a
+rota lenta. predict() é síncrono e o router roda em threadpool; o Lock está aí
+porque não há garantia de que o pipeline e o explainer sejam thread-safe.
 
-Decisões técnicas:
-    * O ``shap.TreeExplainer`` é construído uma única vez no startup — criar o
-      explainer por request custaria dezenas de milissegundos.
-    * ``predict`` é CPU-bound e síncrono; o router o executa em threadpool para
-      não bloquear o event loop. Um ``threading.Lock`` serializa o acesso ao
-      pipeline/explainer, cuja segurança em múltiplas threads não é garantida.
-    * Os valores SHAP das colunas one-hot (``gender_F``, ``gender_M``…) são
-      somados de volta na feature original (``gender``), usando o
-      ``feature_name_map`` salvo no treino — o clínico vê "gender", não dummies.
+Os SHAP das colunas one-hot são somados de volta (gender_F + gender_M -> gender)
+para a resposta mostrar a variável original.
 """
 
 from __future__ import annotations
@@ -49,9 +38,6 @@ from src.pipelines.train_model import ModelBundle
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
-# EXCEÇÕES DE DOMÍNIO
-# =============================================================================
 class ModelLoadError(RuntimeError):
     """O artefato do modelo não existe ou é inválido."""
 
@@ -60,24 +46,14 @@ class InferenceError(RuntimeError):
     """Falha ao calcular a predição para um request válido."""
 
 
-# =============================================================================
-# ENTITY
-# =============================================================================
 @dataclass(frozen=True, slots=True)
 class InferenceResult:
-    """Resposta da predição + latência medida (para auditoria/observabilidade)."""
-
     response: TriagePredictionResponse
     features: dict[str, Any]
     latency_ms: float
 
 
-# =============================================================================
-# BOUNDARY — carregamento do artefato
-# =============================================================================
 class ModelLoader:
-    """Lê e valida o ``ModelBundle`` serializado pelo pipeline do DIA 1."""
-
     @staticmethod
     def load(path: Path) -> ModelBundle:
         if not path.is_file():
@@ -87,7 +63,7 @@ class ModelLoader:
             )
         try:
             bundle = joblib.load(path)
-        except Exception as exc:  # noqa: BLE001 — qualquer falha de unpickle é fatal
+        except Exception as exc:  # noqa: BLE001
             raise ModelLoadError(f"Falha ao desserializar o modelo em {path}: {exc}") from exc
         if not isinstance(bundle, ModelBundle):
             raise ModelLoadError(
@@ -103,12 +79,7 @@ class ModelLoader:
         return bundle
 
 
-# =============================================================================
-# CONTROL — caso de uso de inferência
-# =============================================================================
 class TriageInferenceService:
-    """Executa a predição de risco e a explicação SHAP para um paciente."""
-
     def __init__(self, bundle: ModelBundle, risk_settings: RiskStratificationSettings) -> None:
         self._bundle = bundle
         self._risk = risk_settings
@@ -122,7 +93,6 @@ class TriageInferenceService:
     def from_path(cls, path: Path, risk_settings: RiskStratificationSettings) -> TriageInferenceService:
         return cls(ModelLoader.load(path), risk_settings)
 
-    # --- Metadados expostos ao health-check ----------------------------------
     @property
     def model_version(self) -> str:
         return self._bundle.model_version
@@ -135,9 +105,7 @@ class TriageInferenceService:
     def trained_at(self) -> str:
         return self._bundle.trained_at
 
-    # --- Caso de uso ---------------------------------------------------------
     def predict(self, request: PatientTriageRequest) -> InferenceResult:
-        """Probabilidade, categoria de risco e top-K fatores (SHAP local)."""
         started = time.perf_counter()
         features = request.to_model_features()
         frame = self._to_frame(features)
@@ -146,7 +114,7 @@ class TriageInferenceService:
             with self._lock:
                 probability = float(self._bundle.pipeline.predict_proba(frame)[0, 1])
                 shap_row = self._local_shap(frame)
-        except Exception as exc:  # noqa: BLE001 — encapsula erros de libs de ML
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Falha na inferência do modelo.")
             raise InferenceError("Não foi possível calcular a predição.") from exc
 
@@ -165,16 +133,14 @@ class TriageInferenceService:
         latency_ms = (time.perf_counter() - started) * 1_000
         return InferenceResult(response=response, features=features, latency_ms=round(latency_ms, 3))
 
-    # --- Etapas internas -----------------------------------------------------
     def _to_frame(self, features: dict[str, Any]) -> pd.DataFrame:
-        """DataFrame de 1 linha na ordem canônica do ``FeatureSchema``."""
         missing = set(self._feature_order) - features.keys()
         if missing:
             raise InferenceError(f"Features ausentes para o modelo: {sorted(missing)}")
         return pd.DataFrame([[features[name] for name in self._feature_order]], columns=self._feature_order)
 
     def _local_shap(self, frame: pd.DataFrame) -> dict[str, float]:
-        """SHAP do paciente, somado por feature clínica original (log-odds)."""
+        """SHAP do paciente em log-odds, somado por feature original."""
         transformed = self._preprocessor.transform(frame)
         values = np.asarray(self._explainer.shap_values(transformed)).reshape(-1)
         names = self._bundle.transformed_feature_names
@@ -196,12 +162,7 @@ class TriageInferenceService:
         ]
 
 
-# =============================================================================
-# BOUNDARY — persistência da auditoria
-# =============================================================================
 class AuditLogRepository:
-    """Grava cada predição em ``triage_audit_logs`` (transação própria)."""
-
     def __init__(self, database: DatabaseManager) -> None:
         self._database = database
 

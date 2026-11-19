@@ -1,1 +1,0 @@
-"""Persistência assíncrona (SQLAlchemy + PostgreSQL)."""

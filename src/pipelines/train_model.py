@@ -1,28 +1,11 @@
-"""Pipeline de treinamento do modelo de readmissão hospitalar em 30 dias.
+"""Treino do modelo de readmissão em 30 dias (XGBoost + SHAP).
 
-Arquitetura BCE (Boundary-Control-Entity):
-    * Entity   -> ``TrainingConfig``, ``FeatureSchema``, ``ClinicalMetrics``,
-                  ``ModelBundle``: dados e contratos do domínio de ML.
-    * Control  -> ``PipelineFactory``, ``ThresholdSelector``, ``ClinicalEvaluator``,
-                  ``ShapExplainer`` e o orquestrador ``ReadmissionModelTrainer``.
-    * Boundary -> ``CsvDatasetLoader``, ``ArtifactRepository`` e ``main()``.
+Algumas escolhas:
+- desbalanceamento tratado com scale_pos_weight (n_neg / n_pos), sem SMOTE;
+- o limiar de decisão sai do índice de Youden em predições out-of-fold do treino,
+  então o conjunto de teste só é usado na avaliação final;
+- RobustScaler nas numéricas porque o tempo de internação tem cauda longa.
 
-Decisões técnicas:
-    * Pré-processamento: ``OneHotEncoder`` (categóricas), ``RobustScaler``
-      (numéricas — resistente a outliers como LOS de 60 dias) e passthrough
-      para as flags binárias de comorbidade.
-    * Classificador: XGBoost (``tree_method="hist"``).
-    * Desbalanceamento: ``scale_pos_weight = n_neg / n_pos`` — equivalente
-      exato a ``class_weight="balanced"`` para classificação binária, sem
-      gerar amostras sintéticas (evita vazamento que o SMOTE pode introduzir
-      quando aplicado fora de validação cruzada).
-    * Limiar de decisão: escolhido pelo índice de Youden (sens + esp - 1) em
-      predições out-of-fold do conjunto de TREINO — o teste nunca é tocado
-      para tunar nada.
-    * Explicabilidade: SHAP ``TreeExplainer`` com agregação das colunas
-      one-hot de volta para a feature clínica original.
-
-Execução:
     python -m src.pipelines.train_model --data data/raw/mimic_synthetic.csv
 """
 
@@ -72,13 +55,8 @@ METRICS_FILENAME: Final[str] = "metrics_report.json"
 SHAP_FILENAME: Final[str] = "shap_global_importance.json"
 
 
-# =============================================================================
-# ENTITY
-# =============================================================================
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
-    """Hiperparâmetros e parâmetros de experimento."""
-
     test_size: float = 0.20
     cv_folds: int = 5
     seed: int = 42
@@ -94,8 +72,6 @@ class TrainingConfig:
 
 @dataclass(frozen=True, slots=True)
 class FeatureSchema:
-    """Contrato de features consumido pelo pipeline (e, no futuro, pela API)."""
-
     categorical: tuple[str, ...]
     numerical: tuple[str, ...]
     binary: tuple[str, ...]
@@ -104,12 +80,10 @@ class FeatureSchema:
 
     @property
     def all_features(self) -> list[str]:
-        """Ordem canônica das colunas de entrada do pipeline."""
         return [*self.categorical, *self.numerical, *self.binary]
 
     @classmethod
     def from_dataframe(cls, df: pd.DataFrame) -> FeatureSchema:
-        """Deriva o esquema; comorbidades são detectadas pelo prefixo."""
         binary = tuple(sorted(c for c in df.columns if c.startswith(COMORBIDITY_PREFIX)))
         if not binary:
             raise ValueError(f"Nenhuma coluna com prefixo '{COMORBIDITY_PREFIX}' encontrada.")
@@ -126,8 +100,6 @@ class FeatureSchema:
 
 @dataclass(frozen=True, slots=True)
 class ClinicalMetrics:
-    """Métricas de desempenho com nomenclatura clínica."""
-
     threshold: float
     sensitivity_recall: float
     specificity: float
@@ -146,7 +118,7 @@ class ClinicalMetrics:
 
 @dataclass(slots=True)
 class ModelBundle:
-    """Artefato único serializado — tudo que a inferência precisa (Dia 3)."""
+    """Tudo que a API precisa para inferir: pipeline, esquema, limiar e métricas."""
 
     pipeline: Pipeline
     schema: FeatureSchema
@@ -167,12 +139,7 @@ class ModelBundle:
     )
 
 
-# =============================================================================
-# CONTROL
-# =============================================================================
 class PipelineFactory:
-    """Constrói o ``Pipeline`` scikit-learn (pré-processamento + XGBoost)."""
-
     def __init__(self, config: TrainingConfig) -> None:
         self._config = config
 
@@ -210,8 +177,6 @@ class PipelineFactory:
 
 
 class ThresholdSelector:
-    """Seleciona o limiar ótimo pelo índice J de Youden."""
-
     @staticmethod
     def youden(y_true: IntArray, y_proba: FloatArray) -> float:
         fpr, tpr, thresholds = roc_curve(y_true, y_proba)
@@ -222,8 +187,6 @@ class ThresholdSelector:
 
 
 class ClinicalEvaluator:
-    """Calcula métricas clínicas a partir de probabilidades e de um limiar."""
-
     @staticmethod
     def evaluate(y_true: IntArray, y_proba: FloatArray, threshold: float) -> ClinicalMetrics:
         y_pred = (y_proba >= threshold).astype(np.int64)
@@ -251,15 +214,13 @@ class ClinicalEvaluator:
 
 
 class ShapExplainer:
-    """Extrai importâncias SHAP globais agregadas por feature clínica original."""
-
     def __init__(self, pipeline: Pipeline, feature_name_map: dict[str, str]) -> None:
         self._preprocessor: ColumnTransformer = pipeline.named_steps["preprocessor"]
         self._classifier: XGBClassifier = pipeline.named_steps["classifier"]
         self._feature_name_map = feature_name_map
 
     def global_importance(self, X: pd.DataFrame) -> dict[str, dict[str, float]]:
-        """Retorna ``mean(|SHAP|)`` por feature transformada e por feature original."""
+        """mean(|SHAP|) por coluna transformada e somado por feature original."""
         X_transformed = self._preprocessor.transform(X)
         names = list(self._preprocessor.get_feature_names_out())
         explainer = shap.TreeExplainer(self._classifier)
@@ -279,8 +240,6 @@ class ShapExplainer:
 
 
 class ReadmissionModelTrainer:
-    """Orquestrador do treinamento (Facade sobre os componentes de controle)."""
-
     def __init__(
         self,
         config: TrainingConfig,
@@ -309,7 +268,7 @@ class ReadmissionModelTrainer:
             len(y_train), len(y_test), 100 * n_pos / len(y_train), scale_pos_weight,
         )
 
-        # 1) Limiar via predições out-of-fold (somente dados de treino).
+        # limiar escolhido só com o treino (out-of-fold)
         cv = StratifiedKFold(n_splits=cfg.cv_folds, shuffle=True, random_state=cfg.seed)
         oof_proba = cross_val_predict(
             self._factory.build(schema, scale_pos_weight),
@@ -319,15 +278,12 @@ class ReadmissionModelTrainer:
         oof_auc = roc_auc_score(y_train, oof_proba)
         logger.info("AUC-ROC out-of-fold (treino): %.4f | Limiar Youden: %.4f", oof_auc, threshold)
 
-        # 2) Ajuste final no treino completo.
         pipeline = self._factory.build(schema, scale_pos_weight)
         pipeline.fit(X_train, y_train)
 
-        # 3) Avaliação holdout.
         test_proba = pipeline.predict_proba(X_test)[:, 1]
         metrics = self._evaluator.evaluate(y_test, test_proba, threshold)
 
-        # 4) Explicabilidade.
         preprocessor: ColumnTransformer = pipeline.named_steps["preprocessor"]
         transformed_names = [str(n) for n in preprocessor.get_feature_names_out()]
         name_map = _build_feature_name_map(transformed_names, schema)
@@ -348,7 +304,7 @@ class ReadmissionModelTrainer:
 
 
 def _build_feature_name_map(transformed: list[str], schema: FeatureSchema) -> dict[str, str]:
-    """Mapeia ``gender_F`` -> ``gender``; demais colunas mapeiam para si mesmas."""
+    """gender_F -> gender; as outras colunas ficam como estão."""
     mapping: dict[str, str] = {}
     for name in transformed:
         original = next(
@@ -362,12 +318,7 @@ def _sort_desc(values: dict[str, float]) -> dict[str, float]:
     return {k: round(v, 6) for k, v in sorted(values.items(), key=lambda kv: kv[1], reverse=True)}
 
 
-# =============================================================================
-# BOUNDARY
-# =============================================================================
 class CsvDatasetLoader:
-    """Carrega o dataset bruto do disco."""
-
     @staticmethod
     def load(path: Path) -> pd.DataFrame:
         if not path.exists():
@@ -381,8 +332,6 @@ class CsvDatasetLoader:
 
 
 class ArtifactRepository:
-    """Persiste os artefatos do modelo em ``models/``."""
-
     def __init__(self, models_dir: Path) -> None:
         self._dir = models_dir
 
@@ -413,7 +362,6 @@ class ArtifactRepository:
 
 
 def _print_report(metrics: ClinicalMetrics, shap_importance: dict[str, dict[str, float]]) -> None:
-    """Imprime um relatório clínico legível no terminal."""
     rows = [
         ("Limiar de decisão (Youden)", metrics.threshold),
         ("Sensibilidade / Recall", metrics.sensitivity_recall),
@@ -450,7 +398,6 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Ponto de entrada CLI."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     args = _parse_args()
     df = CsvDatasetLoader.load(args.data)
@@ -460,9 +407,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    # Reimporta pelo caminho canônico para que o pickle registre as classes como
-    # ``src.pipelines.train_model.ModelBundle`` (e não ``__main__.ModelBundle``),
-    # permitindo que a API (Dia 3) desserialize o artefato normalmente.
+    # importa de novo pelo pacote para o pickle gravar src.pipelines.train_model.ModelBundle
+    # e não __main__.ModelBundle (senão a API não consegue carregar o arquivo)
     from src.pipelines.train_model import main as _canonical_main
 
     _canonical_main()

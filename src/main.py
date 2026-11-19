@@ -1,22 +1,9 @@
-"""Ponto de entrada da API FastAPI.
+"""App FastAPI.
 
-Arquitetura BCE — Boundary de mais alto nível: monta a aplicação, conecta
-middlewares e routers e controla o ciclo de vida dos recursos (lifespan).
+Se o modelo ou o banco falharem no startup a API sobe mesmo assim, e o /health
+mostra o problema (503 sem modelo, "degraded" sem banco).
 
-Startup:
-    1. Carrega o ``ModelBundle`` e constrói o ``TriageInferenceService``
-       (SHAP explainer incluso) uma única vez por processo.
-    2. Cria o ``DatabaseManager`` e, se configurado, as tabelas ausentes.
-Shutdown:
-    3. Fecha o pool de conexões.
-
-Falhas no startup não derrubam o processo: a API sobe em modo degradado e o
-``/health`` reporta o problema (503 sem modelo; "degraded" sem banco). Em
-produção, o probe do orquestrador decide se reinicia o container.
-
-Execução:
-    uvicorn src.main:app --reload            # desenvolvimento
-    python -m src.main                       # atalho equivalente
+    uvicorn src.main:app --reload
 """
 
 from __future__ import annotations
@@ -51,23 +38,21 @@ def configure_logging(level: str) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
 
-    # --- Modelo --------------------------------------------------------------
     app.state.inference_service = None
     try:
         app.state.inference_service = TriageInferenceService.from_path(
             settings.model_path, settings.risk
         )
     except ModelLoadError:
-        logger.exception("API iniciada SEM modelo — /triage/predict responderá 503.")
+        logger.exception("API iniciada sem modelo; /triage/predict vai responder 503.")
 
-    # --- Banco de dados ------------------------------------------------------
     database = get_database_manager()
     app.state.database = database
     app.state.audit_repository = AuditLogRepository(database)
     if settings.database.create_tables_on_startup:
         try:
             await database.create_tables()
-        except Exception:  # noqa: BLE001 — banco fora não impede predições
+        except Exception:  # noqa: BLE001
             logger.exception("Banco indisponível no startup (%s).", settings.database.safe_dsn)
 
     logger.info("%s v%s pronta (%s).", settings.app_name, settings.app_version, settings.environment)
@@ -75,11 +60,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await database.dispose()
-        logger.info("Recursos liberados — shutdown concluído.")
+        logger.info("Shutdown concluído.")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    """Fábrica da aplicação (permite instâncias isoladas nos testes)."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
@@ -88,12 +72,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=settings.app_version,
         description=(
             "Triagem de risco de readmissão hospitalar em 30 dias com XGBoost "
-            "e explicabilidade SHAP. Ferramenta de apoio à decisão clínica — "
-            "não substitui o julgamento profissional."
+            "e explicabilidade SHAP. É apoio à decisão clínica "
+            "e não substitui o julgamento profissional."
         ),
         lifespan=lifespan,
         debug=settings.debug,
-        # Swagger desabilitado em produção para não expor a superfície da API.
+        # sem Swagger em produção
         docs_url=None if settings.is_production else "/docs",
         redoc_url=None if settings.is_production else "/redoc",
     )

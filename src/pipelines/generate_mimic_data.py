@@ -1,24 +1,9 @@
-"""Gerador de dados sintéticos inspirados na estrutura do MIMIC-IV.
+"""Gera uma coorte sintética no formato do MIMIC-IV (uma linha por internação).
 
-Arquitetura BCE (Boundary-Control-Entity):
-    * Entity   -> ``ComorbiditySpec`` e ``SyntheticDataConfig``: estruturas imutáveis
-                  que descrevem o domínio clínico e os parâmetros da simulação.
-    * Control  -> ``MimicSyntheticDataGenerator``: regra de negócio que gera a
-                  coorte com correlações estatísticas clinicamente plausíveis.
-    * Boundary -> ``CsvDatasetWriter`` + ``main()``: fronteira de I/O (disco/CLI).
+As variáveis são correlacionadas de propósito: a idade puxa as comorbidades, que
+puxam o tempo de internação e o número de medicações, e tudo isso entra no risco
+de readmissão. O intercepto é ajustado por bisseção para a prevalência ficar em 15%.
 
-Correlações modeladas (direção clínica esperada):
-    * Idade ↑  -> prevalência de comorbidades ↑
-    * Idade ↑ e nº de comorbidades ↑ -> tempo de internação (LOS) ↑
-    * LOS ↑ -> nº de procedimentos laboratoriais ↑
-    * Comorbidades ↑ -> nº de medicações (polifarmácia) ↑
-    * Todos os fatores acima (+ admissão de emergência) -> readmissão em 30 dias ↑
-
-A prevalência do alvo ``readmitted_30d`` é calibrada por bisseção no intercepto
-do modelo logístico gerador, garantindo a taxa desejada (padrão 15%, dentro da
-faixa de 12-18% observada na literatura).
-
-Execução:
     python -m src.pipelines.generate_mimic_data --n-records 10000 --seed 42
 """
 
@@ -39,34 +24,21 @@ logger = logging.getLogger(__name__)
 FloatArray = npt.NDArray[np.float64]
 IntArray = npt.NDArray[np.int64]
 
-#: Prefixo das colunas binárias que compõem o "array" de comorbidades.
 COMORBIDITY_PREFIX: Final[str] = "comorbidity_"
 TARGET_COLUMN: Final[str] = "readmitted_30d"
 DEFAULT_OUTPUT_PATH: Final[Path] = Path("data/raw/mimic_synthetic.csv")
 
 
-# =============================================================================
-# ENTITY
-# =============================================================================
 @dataclass(frozen=True, slots=True)
 class ComorbiditySpec:
-    """Descreve uma comorbidade e seu comportamento epidemiológico simulado.
-
-    Attributes:
-        name: Identificador snake_case (vira coluna ``comorbidity_<name>``).
-        base_logit: Log-odds de prevalência para um paciente de 18 anos.
-        age_slope: Incremento de log-odds por década acima de 18 anos.
-        readmission_weight: Contribuição (log-odds) para o risco de readmissão.
-    """
-
+    # base_logit: log-odds de prevalência aos 18 anos; age_slope: quanto soma por década
     name: str
     base_logit: float
     age_slope: float
     readmission_weight: float
 
 
-#: Painel de comorbidades crônicas frequentes em coortes de readmissão
-#: (inspirado nos componentes do Índice de Charlson / escore LACE).
+# lista inspirada no índice de Charlson e no escore LACE
 DEFAULT_COMORBIDITIES: Final[tuple[ComorbiditySpec, ...]] = (
     ComorbiditySpec("hypertension", base_logit=-2.6, age_slope=0.55, readmission_weight=0.15),
     ComorbiditySpec("diabetes", base_logit=-3.0, age_slope=0.40, readmission_weight=0.30),
@@ -78,7 +50,6 @@ DEFAULT_COMORBIDITIES: Final[tuple[ComorbiditySpec, ...]] = (
     ComorbiditySpec("liver_disease", base_logit=-4.0, age_slope=0.10, readmission_weight=0.45),
 )
 
-#: Tipos de admissão no padrão MIMIC-IV (simplificado) e suas probabilidades.
 ADMISSION_TYPES: Final[dict[str, float]] = {
     "EMERGENCY": 0.60,
     "URGENT": 0.15,
@@ -86,7 +57,7 @@ ADMISSION_TYPES: Final[dict[str, float]] = {
     "OBSERVATION": 0.05,
 }
 
-#: Contribuição do tipo de admissão para o risco de readmissão (log-odds).
+# log-odds somados ao risco de readmissão
 ADMISSION_RISK: Final[dict[str, float]] = {
     "EMERGENCY": 0.35,
     "URGENT": 0.20,
@@ -97,16 +68,6 @@ ADMISSION_RISK: Final[dict[str, float]] = {
 
 @dataclass(frozen=True, slots=True)
 class SyntheticDataConfig:
-    """Parâmetros de simulação da coorte.
-
-    Attributes:
-        n_records: Quantidade de pacientes/internações a gerar.
-        seed: Semente para reprodutibilidade total.
-        target_prevalence: Taxa alvo de readmissão em 30 dias (0.12-0.18).
-        min_age / max_age: Faixa etária adulta (MIMIC-IV inclui apenas >= 18).
-        comorbidities: Painel de comorbidades simuladas.
-    """
-
     n_records: int = 10_000
     seed: int = 42
     target_prevalence: float = 0.15
@@ -123,23 +84,12 @@ class SyntheticDataConfig:
             raise ValueError("Faixa etária inválida (esperado 18 <= min_age < max_age <= 120).")
 
 
-# =============================================================================
-# CONTROL
-# =============================================================================
 class MimicSyntheticDataGenerator:
-    """Gera uma coorte sintética com correlações clínicas coerentes.
-
-    Cada etapa da simulação é um método privado com responsabilidade única
-    (SRP), e o gerador depende apenas da configuração injetada (DIP).
-    """
-
     def __init__(self, config: SyntheticDataConfig) -> None:
         self._config = config
         self._rng: np.random.Generator = np.random.default_rng(config.seed)
 
-    # ------------------------------------------------------------------ API
     def generate(self) -> pd.DataFrame:
-        """Executa a simulação completa e retorna o DataFrame da coorte."""
         n = self._config.n_records
         logger.info("Gerando %d registros sintéticos (seed=%d)...", n, self._config.seed)
 
@@ -184,9 +134,7 @@ class MimicSyntheticDataGenerator:
         logger.info("Prevalência de readmissão obtida: %.2f%%", 100 * df[TARGET_COLUMN].mean())
         return df
 
-    # ------------------------------------------------------------- Etapas
     def _sample_age(self, n: int) -> IntArray:
-        """Idade com distribuição assimétrica à esquerda (coorte hospitalar envelhecida)."""
         cfg = self._config
         span = cfg.max_age - cfg.min_age
         # Beta(3.2, 2.0) concentra a massa entre ~55 e ~80 anos.
@@ -194,7 +142,6 @@ class MimicSyntheticDataGenerator:
         return (cfg.min_age + raw * span).round().astype(np.int64)
 
     def _sample_comorbidities(self, age: IntArray) -> IntArray:
-        """Matriz binária (n x k): prevalência cresce com a idade (logística)."""
         decades_above_min = (age - self._config.min_age) / 10.0
         columns: list[IntArray] = []
         for spec in self._config.comorbidities:
@@ -209,20 +156,16 @@ class MimicSyntheticDataGenerator:
         n_comorbidities: IntArray,
         admission_type: npt.NDArray[np.str_],
     ) -> FloatArray:
-        """LOS (dias) ~ LogNormal: média cresce com idade, carga de doença e urgência."""
         emergency_boost = np.where(np.isin(admission_type, ["EMERGENCY", "URGENT"]), 0.20, 0.0)
         mu = 0.85 + 0.008 * (age - self._config.min_age) + 0.16 * n_comorbidities + emergency_boost
         los = self._rng.lognormal(mean=mu, sigma=0.55)
-        # Limites plausíveis: 0.5 dia (observação curta) até 60 dias.
         return np.clip(los, 0.5, 60.0).round(1)
 
     def _sample_lab_procedures(self, length_of_stay: FloatArray) -> IntArray:
-        """Exames laboratoriais ~ Poisson, proporcionais (sublinearmente) ao LOS."""
         lam = 8.0 + 9.0 * np.sqrt(length_of_stay)
         return np.clip(self._rng.poisson(lam), 1, 200).astype(np.int64)
 
     def _sample_medications(self, n_comorbidities: IntArray, age: IntArray) -> IntArray:
-        """Medicações ~ Poisson: polifarmácia associada a comorbidades e idade."""
         lam = 4.0 + 2.6 * n_comorbidities + 0.05 * (age - self._config.min_age)
         return np.clip(self._rng.poisson(lam), 0, 80).astype(np.int64)
 
@@ -237,12 +180,7 @@ class MimicSyntheticDataGenerator:
         num_lab_procedures: IntArray,
         num_medications: IntArray,
     ) -> FloatArray:
-        """Log-odds de readmissão (sem intercepto) — o "ground truth" da simulação.
-
-        Inclui um termo de interação idade x comorbidades e um efeito não
-        linear do LOS (log), para que modelos baseados em árvore tenham sinal
-        além do puramente linear.
-        """
+        # sem intercepto; a interação e o log(LOS) dão algum sinal não linear às árvores
         weights = np.array([s.readmission_weight for s in self._config.comorbidities])
         n_comorb = comorbidity_matrix.sum(axis=1)
         elderly = (age >= 65).astype(np.float64)
@@ -257,11 +195,10 @@ class MimicSyntheticDataGenerator:
             + np.where(gender == "M", 0.08, 0.0)
             + np.vectorize(ADMISSION_RISK.__getitem__)(admission_type)
         )
-        # Ruído não observado (fatores sociais, adesão, etc.)
+        # o que não está nos dados (fatores sociais, adesão...)
         return logit + self._rng.normal(0.0, 0.35, size=logit.shape[0])
 
     def _sample_target(self, linear_predictor: FloatArray) -> IntArray:
-        """Calibra o intercepto por bisseção para atingir a prevalência alvo."""
         target = self._config.target_prevalence
         low, high = -15.0, 15.0
         for _ in range(60):
@@ -276,28 +213,19 @@ class MimicSyntheticDataGenerator:
         return self._rng.binomial(1, probs).astype(np.int64)
 
     def _build_patient_ids(self, n: int) -> npt.NDArray[np.str_]:
-        """IDs no estilo MIMIC (subject_id de 8 dígitos), únicos."""
         ids = self._rng.choice(np.arange(10_000_000, 20_000_000), size=n, replace=False)
         return ids.astype(str)
 
 
 def _sigmoid(x: FloatArray) -> FloatArray:
-    """Função logística numericamente estável."""
     return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 
 
-# =============================================================================
-# BOUNDARY
-# =============================================================================
 class DatasetWriter(Protocol):
-    """Contrato de persistência (permite trocar CSV por Parquet/DB — OCP/DIP)."""
-
     def write(self, df: pd.DataFrame, path: Path) -> Path: ...
 
 
 class CsvDatasetWriter:
-    """Persiste o dataset em CSV, criando diretórios quando necessário."""
-
     def write(self, df: pd.DataFrame, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(path, index=False)
@@ -315,7 +243,6 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Ponto de entrada CLI."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     args = _parse_args()
     config = SyntheticDataConfig(
