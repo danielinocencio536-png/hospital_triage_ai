@@ -1,4 +1,4 @@
-# 🏥 Hospital Triage AI — Predição de Readmissão em 30 Dias
+# Hospital Triage AI — Predição de Readmissão em 30 Dias
 
 API que estima o **risco de um paciente voltar a ser internado em até 30 dias** após a alta e explica **quais fatores mais pesaram** nessa estimativa, para apoiar a equipe a priorizar o acompanhamento pós-alta.
 
@@ -9,11 +9,11 @@ API que estima o **risco de um paciente voltar a ser internado em até 30 dias**
 ![SHAP](https://img.shields.io/badge/SHAP-explicabilidade-purple)
 ![AUC](https://img.shields.io/badge/AUC--ROC-0.79-brightgreen)
 
-> ⚠️ Projeto de estudo com **dados sintéticos** inspirados na estrutura do MIMIC-IV. Não usar para decisões clínicas reais.
+> **Aviso:** projeto de estudo com **dados sintéticos** inspirados na estrutura do MIMIC-IV. Não usar para decisões clínicas reais.
 
 ---
 
-## 🎯 Objetivo
+## Objetivo
 
 Readmissões em 30 dias são caras e, muitas vezes, evitáveis. O objetivo do projeto é:
 
@@ -21,7 +21,7 @@ Readmissões em 30 dias são caras e, muitas vezes, evitáveis. O objetivo do pr
 - **Explicar o porquê** de cada predição (SHAP), para que o profissional de saúde confie e possa agir;
 - **Entregar via API**, pronta para ser integrada a um sistema hospitalar, com auditoria de cada predição.
 
-## 🙋 Minha contribuição
+## Minha contribuição
 
 Projeto individual. Desenvolvi de ponta a ponta, em 4 etapas:
 
@@ -37,7 +37,7 @@ Projeto individual. Desenvolvi de ponta a ponta, em 4 etapas:
 - **Limiar de Youden** em vez de 0,5 fixo: equilibra sensibilidade e especificidade numa base desbalanceada (15% de readmissões).
 - **Arquitetura BCE** (Boundary-Control-Entity): separa API, regra de negócio e dados, o que facilita testes e manutenção.
 
-## 📎 Evidências
+## Evidências
 
 ### Métricas do modelo (conjunto de teste, 2.000 pacientes)
 Fonte: [`models/metrics_report.json`](models/metrics_report.json)
@@ -77,7 +77,7 @@ Diabetes                    ██████▍                   0,153
 }
 ```
 
-## ⚙️ Como funciona uma predição
+## Como funciona uma predição
 
 ```mermaid
 sequenceDiagram
@@ -101,7 +101,7 @@ sequenceDiagram
     R-->>C: 200 + JSON + header X-Audit-Logged
 ```
 
-## 🗂 Estrutura
+## Estrutura
 
 ```
 src/
@@ -120,7 +120,7 @@ docker-compose.yml               # API + PostgreSQL
 models/                          # métricas e importâncias SHAP
 ```
 
-## ▶️ Como rodar
+## Como rodar
 
 ### Com Docker (API + PostgreSQL)
 
@@ -170,13 +170,13 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-## 🔭 Próximos passos
+## Próximos passos
 
 - [x] Testes automatizados (pytest) e CI no GitHub Actions
 - [x] Dockerfile e docker-compose com PostgreSQL
 - [ ] Calibração de probabilidades e análise de justiça (fairness) por sexo e idade
 - [ ] Painel simples para a equipe visualizar os pacientes de alto risco
 
-## 👤 Autor
+## Autor
 
 **Daniel Inocêncio** — [GitHub](https://github.com/danielinocencio536-png)
