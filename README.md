@@ -30,7 +30,7 @@ Projeto individual. Desenvolvi de ponta a ponta, em 4 etapas:
 | **Dia 1 — Dados e modelo** | Gerador de dados sintéticos com correlações clinicamente plausíveis (idade → comorbidades → tempo de internação → readmissão), prevalência calibrada em 15%. Treino com XGBoost, validação cruzada estratificada, escolha do limiar por Youden e cálculo de importância global com SHAP. |
 | **Dia 2 — Infraestrutura** | Configuração por variáveis de ambiente (`pydantic-settings`), camada de banco assíncrona (PostgreSQL/SQLite) e contratos de entrada/saída com validação de faixas (Pydantic v2). IDs pseudonimizados pensando na LGPD. |
 | **Dia 3 — API** | Serviço de inferência com explicação SHAP por paciente, rota `POST /api/v1/triage/predict`, `GET /health` para monitoramento e log de auditoria de cada predição. A API sobe em modo degradado se o modelo ou o banco falharem. |
-| **Dia 4 — Testes e Docker** | 73 testes com pytest (pipeline, serviço e API, com o modelo treinado na própria suíte e SQLite no lugar do Postgres). Dockerfile multi-stage que treina o modelo durante o build e roda com usuário não-root, docker-compose com PostgreSQL e CI no GitHub Actions que sobe tudo e chama a API. |
+| **Dia 4 — Testes e Docker** | Testes com pytest (pipeline, serviço e API, com o modelo treinado na própria suíte e SQLite no lugar do Postgres). Dockerfile multi-stage que treina o modelo durante o build e roda com usuário não-root, docker-compose com PostgreSQL e CI no GitHub Actions que sobe tudo e chama a API. |
 
 **Decisões que tomei:**
 - **XGBoost + SHAP** em vez de um modelo "caixa-preta" sem explicação: na saúde, a equipe precisa entender o motivo do alerta.
@@ -62,6 +62,39 @@ Insuficiência cardíaca      █████████▎                0,22
 Doença renal crônica        ███████▋                  0,185
 Diabetes                    ██████▍                   0,153
 ```
+
+### Calibração: a probabilidade está superestimada
+Fonte: [`models/evaluation_report.json`](models/evaluation_report.json), gerado por `python -m src.pipelines.evaluate_model` no mesmo conjunto de teste.
+
+O modelo **ordena bem** os pacientes (AUC 0,79), mas a probabilidade que ele devolve **não deve ser lida ao pé da letra**. Na média ele prevê 36% de readmissão para uma base onde 15% voltam. O Brier (0,164) fica pior que o de um modelo que só repetisse a prevalência (0,129), e o erro de calibração (ECE) é 0,21.
+
+```mermaid
+xychart-beta
+    title "Prevista x observada (10 grupos de 200 pacientes)"
+    x-axis "Grupo, do menor para o maior risco previsto" [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    y-axis "Taxa de readmissão" 0 --> 0.9
+    line [0.042, 0.100, 0.154, 0.209, 0.270, 0.337, 0.436, 0.544, 0.676, 0.845]
+    line [0.020, 0.030, 0.060, 0.065, 0.085, 0.115, 0.100, 0.220, 0.310, 0.515]
+```
+Linha de cima: probabilidade média prevista. Linha de baixo: taxa real de readmissão.
+
+A causa é o `scale_pos_weight`: ele dá peso ~5,6x aos readmitidos para melhorar a sensibilidade, mas isso infla todas as probabilidades. Num teste rápido, treinar sem o peso ou aplicar calibração isotônica derruba o Brier para ~0,105 e o ECE para ~0,02 sem perder AUC. Isso muda as faixas Low/Moderate/High (hoje 0,30 e 0,50), que foram pensadas na escala inflada, então ficou como próximo passo em vez de entrar escondido aqui.
+
+### Fairness: erro por sexo e faixa etária
+Mesmo limiar (0,50) para todos os grupos.
+
+| Grupo | n | Readmissão real | AUC | Sensibilidade | Especificidade | VPP |
+|---|---|---|---|---|---|---|
+| Feminino | 933 | 14,9% | 0,78 | 64,0% | 81,4% | 37,6% |
+| Masculino | 1.067 | 15,5% | 0,80 | 70,3% | 75,7% | 34,6% |
+| 18-44 anos | 204 | 2,9% | 0,62 | 0% | 99,0% | — |
+| 45-64 anos | 692 | 6,4% | 0,68 | 13,6% | 97,5% | 27,3% |
+| 65-79 anos | 717 | 18,8% | 0,71 | 68,9% | 67,0% | 32,6% |
+| 80+ anos | 387 | 30,7% | 0,77 | 89,1% | 41,4% | 40,3% |
+
+- **Sexo:** diferença pequena (~6 pontos em sensibilidade e especificidade), coerente com a prevalência quase igual.
+- **Idade:** aqui o modelo se comporta de forma bem diferente. Como a idade é o fator mais forte, um limiar único quase nunca alerta para quem tem menos de 65 anos (os 6 readmitidos de 18-44 passaram todos) e alerta demais acima de 80 (especificidade de 41%). O AUC dentro de cada faixa também é menor que o geral, ou seja, o modelo separa bem jovem de idoso, mas tem mais dificuldade de separar idosos entre si.
+- Parte disso vem da base sintética, onde eu mesmo coloquei a idade como principal motor do risco. Com dados reais, o caminho seria olhar limiares por faixa ou features que diferenciem melhor o risco dos mais jovens. O grupo de 18-44 é pequeno (6 casos positivos), então esses números têm muita incerteza.
 
 ### Exemplo de resposta da API
 ```json
@@ -107,7 +140,8 @@ sequenceDiagram
 src/
 ├── pipelines/
 │   ├── generate_mimic_data.py   # gera a base sintética
-│   └── train_model.py           # treina, avalia e salva o modelo + SHAP
+│   ├── train_model.py           # treina, avalia e salva o modelo + SHAP
+│   └── evaluate_model.py        # calibração e fairness no conjunto de teste
 ├── core/config.py               # configurações (variáveis TRIAGE_*)
 ├── database/                    # conexão assíncrona e tabela de auditoria
 ├── models/triage_schemas.py     # contratos da API (Pydantic)
@@ -117,7 +151,7 @@ src/
 tests/                           # pytest: pipeline, serviço e API
 docker/Dockerfile                # build multi-stage (treina o modelo no build)
 docker-compose.yml               # API + PostgreSQL
-models/                          # métricas e importâncias SHAP
+models/                          # métricas, SHAP, calibração e fairness
 ```
 
 ## Como rodar
@@ -141,6 +175,7 @@ copy .env.example .env                              # Linux/Mac: cp; use SQLite 
 
 python -m src.pipelines.generate_mimic_data --n-records 10000 --seed 42
 python -m src.pipelines.train_model --data data/raw/mimic_synthetic.csv
+python -m src.pipelines.evaluate_model                # calibração e fairness
 uvicorn src.main:app --reload
 ```
 
@@ -174,7 +209,8 @@ python -m pytest
 
 - [x] Testes automatizados (pytest) e CI no GitHub Actions
 - [x] Dockerfile e docker-compose com PostgreSQL
-- [ ] Calibração de probabilidades e análise de justiça (fairness) por sexo e idade
+- [x] Análise de calibração e de fairness por sexo e idade
+- [ ] Calibrar as probabilidades (sem `scale_pos_weight` ou isotônica) e revisar as faixas de risco
 - [ ] Painel simples para a equipe visualizar os pacientes de alto risco
 
 ## Autor

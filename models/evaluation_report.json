@@ -1,0 +1,150 @@
+{
+  "model_version": "1.0.0",
+  "decision_threshold": 0.5019,
+  "n_test": 2000,
+  "calibration": {
+    "brier_score": 0.1638,
+    "brier_reference": 0.1289,
+    "expected_calibration_error": 0.2094,
+    "mean_predicted": 0.3614,
+    "observed_rate": 0.152,
+    "bins": [
+      {
+        "mean_predicted": 0.0423,
+        "observed_rate": 0.02,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.0998,
+        "observed_rate": 0.03,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.1545,
+        "observed_rate": 0.06,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.2091,
+        "observed_rate": 0.065,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.2701,
+        "observed_rate": 0.085,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.3374,
+        "observed_rate": 0.115,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.4357,
+        "observed_rate": 0.1,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.5436,
+        "observed_rate": 0.22,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.6764,
+        "observed_rate": 0.31,
+        "count": 200
+      },
+      {
+        "mean_predicted": 0.8449,
+        "observed_rate": 0.515,
+        "count": 200
+      }
+    ]
+  },
+  "fairness": {
+    "gender": {
+      "groups": [
+        {
+          "group": "F",
+          "n": 933,
+          "prevalence": 0.149,
+          "mean_predicted": 0.3402,
+          "auc_roc": 0.7833,
+          "sensitivity": 0.6403,
+          "specificity": 0.8136,
+          "ppv": 0.3755,
+          "brier_score": 0.1548
+        },
+        {
+          "group": "M",
+          "n": 1067,
+          "prevalence": 0.1546,
+          "mean_predicted": 0.3799,
+          "auc_roc": 0.7956,
+          "sensitivity": 0.703,
+          "specificity": 0.7572,
+          "ppv": 0.3463,
+          "brier_score": 0.1717
+        }
+      ],
+      "max_gap": {
+        "sensitivity": 0.0627,
+        "specificity": 0.0564,
+        "ppv": 0.0292
+      }
+    },
+    "age_band": {
+      "groups": [
+        {
+          "group": "18-44",
+          "n": 204,
+          "prevalence": 0.0294,
+          "mean_predicted": 0.1109,
+          "auc_roc": 0.6237,
+          "sensitivity": 0.0,
+          "specificity": 0.9899,
+          "ppv": 0.0,
+          "brier_score": 0.0446
+        },
+        {
+          "group": "45-64",
+          "n": 692,
+          "prevalence": 0.0636,
+          "mean_predicted": 0.2011,
+          "auc_roc": 0.6746,
+          "sensitivity": 0.1364,
+          "specificity": 0.9753,
+          "ppv": 0.2727,
+          "brier_score": 0.0831
+        },
+        {
+          "group": "65-79",
+          "n": 717,
+          "prevalence": 0.1883,
+          "mean_predicted": 0.4553,
+          "auc_roc": 0.7108,
+          "sensitivity": 0.6889,
+          "specificity": 0.6701,
+          "ppv": 0.3263,
+          "brier_score": 0.2187
+        },
+        {
+          "group": "80+",
+          "n": 387,
+          "prevalence": 0.3075,
+          "mean_predicted": 0.606,
+          "auc_roc": 0.7661,
+          "sensitivity": 0.8908,
+          "specificity": 0.4142,
+          "ppv": 0.403,
+          "brier_score": 0.2692
+        }
+      ],
+      "max_gap": {
+        "sensitivity": 0.8908,
+        "specificity": 0.5757,
+        "ppv": 0.403
+      }
+    }
+  }
+}

@@ -258,9 +258,7 @@ class ReadmissionModelTrainer:
         X = df[schema.all_features]
         y = df[schema.target].to_numpy(dtype=np.int64)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=cfg.test_size, stratify=y, random_state=cfg.seed
-        )
+        X_train, X_test, y_train, y_test = split_holdout(X, y, cfg)
         n_pos = int(y_train.sum())
         scale_pos_weight = (len(y_train) - n_pos) / max(n_pos, 1)
         logger.info(
@@ -301,6 +299,16 @@ class ReadmissionModelTrainer:
             metrics=metrics,
         )
         return bundle, shap_importance
+
+
+def split_holdout(
+    X: pd.DataFrame, y: IntArray, cfg: TrainingConfig
+) -> tuple[pd.DataFrame, pd.DataFrame, IntArray, IntArray]:
+    # usado também pelo evaluate_model, para avaliar exatamente o mesmo conjunto de teste
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=cfg.test_size, stratify=y, random_state=cfg.seed
+    )
+    return X_train, X_test, y_train, y_test
 
 
 def _build_feature_name_map(transformed: list[str], schema: FeatureSchema) -> dict[str, str]:
